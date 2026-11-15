@@ -23,14 +23,16 @@ The TV profile keeps the normal remote controls and hides the projector adjustme
 
 The [latest release](https://github.com/Karavell511/home-remote/releases/latest) contains two APKs and a ZIP with both apps and instructions.
 
-1. Install `HomeRemote-Phone-0.9.0.apk` on your phone. It needs Android 8 or newer.
-2. Install `HomeRemote-TV-Projector-0.5.0.apk` on the screen. It needs Android 7 or newer, Android TV or Google TV, with APK installation allowed.
+1. Install `HomeRemote-Phone-0.9.1.apk` on your phone. It needs Android 8 or newer.
+2. Install `HomeRemote-TV-Projector-0.5.1.apk` on the screen. It needs Android 7 or newer, Android TV or Google TV, with APK installation allowed.
 3. Connect both devices to the same home router. In the receiver, press **Разрешить управление**, enable **Управление пультом** in Android Accessibility settings and return to the app.
-4. On the phone, open the remote and press **Подключить**. Enter the IP address and the code shown by the receiver.
+4. On the phone, open the remote and press **Подключить**. It searches for the receiver automatically. Select your screen if several are found, then enter its code. You can also enter the IP address manually.
 
 You can copy the receiver APK with a USB drive. You can also send it from the phone: open **Передать приёмник с телефона** and enter the displayed address in the screen's browser. A USB mouse can help with the initial setup if the original remote is missing.
 
-Pairing is remembered. The code expires after five minutes and can only be used once. Generating a new code revokes the previous phone. One phone is paired at a time.
+You enter the code once. The phone remembers the receiver and reconnects when you reopen the app or WiFi comes back. If the router changes the receiver's IP, the app finds it again and checks its identity using the saved pairing key. Local discovery needs receiver 0.5.1 or newer and a router that allows devices to talk to each other.
+
+The code expires after five minutes and can only be used once. Generating a new code revokes the previous phone. One phone is paired at a time.
 
 The app interface is currently in Russian. There is a [full Russian setup guide](docs/QUICKSTART-RU.txt) and an [English troubleshooting page](docs/TROUBLESHOOTING.md).
 
@@ -52,7 +54,7 @@ Install official updates over the existing apps to keep pairing. Android require
 
 ## Local network access
 
-The receiver uses HTTP on port 8787 with a random token after pairing. Traffic is not encrypted with TLS. Use a trusted home network and do not expose the receiver to the internet. The APK download page uses port 8085 only while that page is open.
+The receiver uses HTTP on port 8787 with a random token after pairing. Local discovery uses UDP port 8788 and never broadcasts the pairing key or PIN. Traffic is not encrypted with TLS. Use a trusted home network and do not expose the receiver to the internet. The APK download page uses port 8085 only while that page is open.
 
 The receiver reads accessible screen elements and performs commands from the paired phone. Press **Остановить управление** to disable the service and revoke access. More details are in [SECURITY.md](SECURITY.md).
 

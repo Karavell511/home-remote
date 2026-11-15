@@ -1,6 +1,8 @@
 # Security and privacy
 
-Use Home Remote only on a trusted private network. The receiver uses HTTP, not TLS; pairing tokens and commands can be observed by an attacker with access to the network traffic. Do not forward ports 8787 or 8085 to the internet. This is an early project, not a remotely administered internet service.
+Use Home Remote only on a trusted private network. The receiver uses HTTP, not TLS; pairing tokens and commands can be observed by an attacker with access to the network traffic. Do not forward ports 8787, 8788 or 8085 to the internet. This is an early project, not a remotely administered internet service.
+
+UDP discovery on port 8788 broadcasts a fresh random challenge, never a PIN or bearer token. A paired receiver signs the challenge and its advertised IP with HMAC SHA256. The phone verifies that proof before sending its token to a newly discovered address. Responses are rate limited and contain only the model, private address and proof. Discovery for a new phone lists nearby receivers but still requires the code on the screen. This does not encrypt the subsequent HTTP control traffic.
 
 - The receiver requires an explicitly enabled Android Accessibility service. It can read accessible UI labels, activate elements and perform navigation commands.
 - Pairing uses a one-time six-digit code, a five-minute expiry and a delay after repeated failures. A random token is stored in private application preferences. Android backups are disabled.

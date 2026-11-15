@@ -25,7 +25,9 @@ public class ReceiverActivity extends Activity {
     private ReceiverClient client; private boolean linked,busy; private volatile int generation; private int pending;
     private TextView status,latency,panelMessage; private RemoteButton connection;
     private Dialog panel; private LinearLayout panelItems; private AlertDialog pairing;
-    private boolean resumed; private long attemptedUpdate=-1;
+    private boolean foreground,automaticConnection; private int reconnectAttempt; private long attemptedUpdate=-1;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private final Runnable reconnect=this::reconnectSaved;
     private JSONObject receiverStatus; private ReceiverUpdate bundledUpdate;
     private String adjustment="", selectedCorner="lt";
     private JSONObject projectorState;
@@ -74,7 +76,7 @@ public class ReceiverActivity extends Activity {
         haptics.setOnCheckedChangeListener((v,on) -> { getSharedPreferences("remote_ui",0).edit().putBoolean("haptics",on).apply(); if(on) haptics.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK); });
         RemoteButton more=button("Ещё",null,BG,MUTED,14,() -> options()); footer.addView(more,new LinearLayout.LayoutParams(dp(72),dp(48)));
         RemoteButton help=button("Как подключить · Инструкция","wifi",BG,MUTED,14,() -> startActivity(new Intent(this,GuideActivity.class))); page.addView(help,lp(-1,48,2));
-        updateDeviceKind(); enabled(); if(!getPreferences(0).getString("token","").isEmpty()) connect(getPreferences(0).getString("ip",""),"");
+        updateDeviceKind(); enabled();
     }
     private void options() {
         new AlertDialog.Builder(this).setTitle("Домашний пульт").setItems(new String[]{"Подключение к устройству","Установить приёмник на ТВ / проектор","Обновления по Wi-Fi","Все настройки устройства","Bluetooth и другие устройства","Инструкция и выбор устройства"},(d,index) -> {
@@ -88,8 +90,11 @@ public class ReceiverActivity extends Activity {
     private void allSettings() { if(!ready()) return; showPanel("Все настройки"); operation(() -> { client.request("/key",new JSONObject().put("key","settings")); Thread.sleep(180); JSONObject screen=client.request("/ui",new JSONObject()); runOnUiThread(() -> renderPanel(screen)); return "Настройки устройства"; },message -> { if(panelMessage!=null) panelMessage.setText(message); }); }
     private void updateDeviceKind() { boolean television=getSharedPreferences("remote_ui",0).getString("device_kind","projector").equals("tv"); imageSection.setVisibility(television?View.GONE:View.VISIBLE); tvSettings.setVisibility(television?View.VISIBLE:View.GONE); brand.setText(television?"ДОМАШНИЙ ПУЛЬТ · ТВ":"ДОМАШНИЙ ПУЛЬТ · ПРОЕКТОР"); }
     private SocketFactory wifi() {
+        return wifiNetwork().getSocketFactory();
+    }
+    private Network wifiNetwork() {
         ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
-        for(Network n:cm.getAllNetworks()) { NetworkCapabilities c=cm.getNetworkCapabilities(n); if(c!=null && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return n.getSocketFactory(); }
+        for(Network n:cm.getAllNetworks()) { NetworkCapabilities c=cm.getNetworkCapabilities(n); if(c!=null && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return n; }
         throw new IllegalStateException("Подключи телефон к домашнему Wi-Fi");
     }
     private boolean ready() { if(!linked) { pairing(); return false; } return !busy; }
@@ -98,22 +103,69 @@ public class ReceiverActivity extends Activity {
         LinearLayout fields=column(); fields.setPadding(dp(24),dp(8),dp(24),0);
         fields.addView(text("Введи адрес и код из «Приёмника пульта» на телевизоре или проекторе.",15,MUTED));
         EditText address=input("IP с экрана приёмника",android.text.InputType.TYPE_CLASS_PHONE); address.setText(getPreferences(0).getString("ip","")); fields.addView(address,lp(-1,54,12));
+        RemoteButton search=button("Найти устройства","wifi",WHITE,INK,15,() -> findReceivers(address)); fields.addView(search,lp(-1,48,8));
         EditText pin=input("Код из 6 цифр",android.text.InputType.TYPE_CLASS_NUMBER); pin.setFilters(new InputFilter[]{new InputFilter.LengthFilter(6)}); fields.addView(pin,lp(-1,54,8));
-        fields.addView(text("Если этот телефон уже подключён, код можно оставить пустым.",12,MUTED),lp(-1,-2,8));
+        fields.addView(text("Код нужен только при первом подключении. Дальше телефон подключается автоматически. Для знакомого устройства оставь код пустым.",12,MUTED),lp(-1,-2,8));
         pairing=new AlertDialog.Builder(this).setTitle("Подключение по Wi-Fi").setView(fields).setNegativeButton("Закрыть",null).setPositiveButton("Подключить",null).create();
-        pairing.setOnShowListener(d -> pairing.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { if(!busy) connect(address.getText().toString().trim(),pin.getText().toString().trim()); })); pairing.show();
+        pairing.setOnShowListener(d -> { pairing.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> { if(!busy) connect(address.getText().toString().trim(),pin.getText().toString().trim()); }); if(address.getText().length()==0) findReceivers(address); }); pairing.show();
+    }
+    private void findReceivers(EditText address) {
+        if(busy) return;
+        status.setText("Ищем устройства в домашней сети…");
+        String currentAddress=address.getText().toString();
+        operation(() -> {
+            Network network=wifiNetwork(); ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+            return new JSONObject(ReceiverDiscovery.find(network,cm.getLinkProperties(network),"",currentAddress)).toString();
+        },raw -> {
+            try {
+                JSONObject found=new JSONObject(raw); ArrayList<String> ips=new ArrayList<>(),names=new ArrayList<>();
+                Iterator<String> keys=found.keys(); while(keys.hasNext()) { String ip=keys.next(); ips.add(ip); names.add(found.getString(ip)+" · "+ip); }
+                if(pairing==null || !pairing.isShowing()) return;
+                if(ips.size()==1) { address.setText(ips.get(0)); status.setText("Устройство найдено. Введи код с его экрана."); }
+                else if(ips.isEmpty()) status.setText("Устройство не найдено. Открой приёмник или введи IP вручную.");
+                else new AlertDialog.Builder(this).setTitle("Выбери устройство").setItems(names.toArray(new String[0]),(d,index) -> address.setText(ips.get(index))).show();
+            } catch(JSONException e) { failure(e); }
+        });
     }
     private void connect(String ip,String code) {
+        connect(ip,code,false);
+    }
+    private void reconnectSaved() {
+        if(!foreground || busy || linked || getPreferences(0).getString("token","").isEmpty()) return;
+        connect(getPreferences(0).getString("ip",""),"",true);
+    }
+    private void scheduleReconnect() {
+        timers.removeCallbacks(reconnect);
+        if(!foreground || getPreferences(0).getString("token","").isEmpty()) return;
+        long delay=Math.min(15000,1000L << Math.min(reconnectAttempt++,4));
+        timers.postDelayed(reconnect,delay);
+    }
+    private void connect(String ip,String code,boolean automatic) {
+        automaticConnection=automatic; timers.removeCallbacks(reconnect);
         try {
-            ReceiverClient next=new ReceiverClient(ip,wifi()); if(code.isEmpty() && ip.equals(getPreferences(0).getString("ip",""))) next.token=getPreferences(0).getString("token","");
+            ReceiverClient next=new ReceiverClient(ip,wifi()); if(code.isEmpty()) next.token=getPreferences(0).getString("token","");
             if(next.token.isEmpty() && !code.matches("[0-9]{6}")) { Toast.makeText(this,"Введи код из 6 цифр с экрана приёмника",Toast.LENGTH_LONG).show(); return; }
             generation++; pending=0; worker.getQueue().clear(); client=next; linked=false;
             operation(() -> {
-                if(next.token.isEmpty()) next.token=next.request("/pair",new JSONObject().put("pin",code)).getString("token");
-                receiverStatus=next.request("/status",new JSONObject()); if(bundledUpdate==null) bundledUpdate=new ReceiverUpdate(this);
-                getPreferences(0).edit().putString("ip",ip).putString("token",next.token).apply();
+                ReceiverClient destination=next;
+                if(!next.token.isEmpty()) {
+                    Network network=wifiNetwork(); ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+                    try {
+                        Map<String,String> found=ReceiverDiscovery.find(network,cm.getLinkProperties(network),next.token,ip);
+                        if(!found.isEmpty()) { destination=new ReceiverClient(found.keySet().iterator().next(),network.getSocketFactory()); destination.token=next.token; }
+                    } catch(java.io.IOException ignored) { /* Older receivers still work at their saved address. */ }
+                }
+                if(next.token.isEmpty()) {
+                    next.token=next.request("/pair",new JSONObject().put("pin",code)).getString("token");
+                    // The PIN is consumed now. Persist before any optional network request.
+                    if(!getPreferences(0).edit().putString("ip",ip).putString("token",next.token).commit())
+                        throw new java.io.IOException("Не удалось сохранить подключение на телефоне");
+                }
+                receiverStatus=destination.request("/status",new JSONObject());
+                if(!getPreferences(0).edit().putString("ip",destination.ip).putString("token",destination.token).commit()) throw new java.io.IOException("Не удалось сохранить подключение на телефоне");
+                client=destination; if(bundledUpdate==null) bundledUpdate=new ReceiverUpdate(this);
                 return "Подключено · "+receiverStatus.optString("model","устройство");
-            },message -> { linked=true; if(pairing!=null) pairing.dismiss(); status.setText(message); enabled(); maybeUpdate(); });
+            },message -> { linked=true; automaticConnection=false; reconnectAttempt=0; if(pairing!=null) pairing.dismiss(); status.setText(message); enabled(); maybeUpdate(); });
         } catch(Exception e) { failure(e); }
     }
     private void maybeUpdate() {
@@ -197,10 +249,14 @@ public class ReceiverActivity extends Activity {
         });
     }
     private void failure(Exception e) {
-        if(e instanceof java.io.IOException || e instanceof SecurityException) { linked=false; generation++; pending=0; worker.getQueue().clear(); }
-        if(e instanceof SecurityException) getPreferences(0).edit().remove("token").apply();
-        String message=e instanceof SecurityException?"Нужен новый код с экрана приёмника":e instanceof java.io.IOException?"Нет ответа от устройства. Проверь сеть и включённый приёмник.":e.getMessage();
-        status.setText(message); if(panelMessage!=null) panelMessage.setText(message); Toast.makeText(this,message,Toast.LENGTH_LONG).show(); enabled();
+        if((getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0) android.util.Log.w("HomeRemote",e.getClass().getSimpleName()+": "+e.getMessage());
+        boolean automatic=automaticConnection; automaticConnection=false;
+        if(e instanceof java.io.IOException || e instanceof SecurityException || !linked) { linked=false; generation++; pending=0; busy=false; worker.getQueue().clear(); }
+        // A stale IP can now belong to another receiver. A rejection there must not erase our pairing.
+        boolean remembered=!getPreferences(0).getString("token","").isEmpty();
+        String message=e instanceof ReceiverClient.AuthenticationException?e.getMessage():e instanceof java.io.IOException?(remembered?"Ждём устройство. Подключение восстановится автоматически.":"Нет ответа от устройства. Проверь сеть и включённый приёмник."):e.getMessage();
+        status.setText(message); if(panelMessage!=null) panelMessage.setText(message); if(!automatic) Toast.makeText(this,message,Toast.LENGTH_LONG).show(); enabled();
+        if(!linked && remembered) scheduleReconnect();
     }
     private void openSetting(String title,String[] labels) {
         if(!ready()) return; showPanel(title);
@@ -379,7 +435,22 @@ public class ReceiverActivity extends Activity {
     private int dp(float value) { return Math.round(value*getResources().getDisplayMetrics().density); }
     private LinearLayout.LayoutParams lp(int w,int h,int top) { LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(w<0?w:dp(w),h<0?h:dp(h)); p.topMargin=dp(top); return p; }
     private LinearLayout.LayoutParams weighted(int height,int margin) { LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(height),1); p.setMargins(dp(margin),0,dp(margin),0); return p; }
-    @Override protected void onResume() { super.onResume(); updateDeviceKind(); if(resumed && !busy && !getPreferences(0).getString("token","").isEmpty()) connect(getPreferences(0).getString("ip",""),""); resumed=true; }
-    @Override protected void onStop() { super.onStop(); generation++; pending=0; busy=false; worker.getQueue().clear(); timers.removeCallbacksAndMessages(null); for(RemoteButton b:controls) b.cancelPress(); for(RemoteButton b:panelControls) b.cancelPress(); }
+    @Override protected void onResume() {
+        super.onResume(); foreground=true; updateDeviceKind(); reconnectAttempt=0;
+        ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
+        networkCallback=new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) { runOnUiThread(() -> { if(foreground && !linked && !busy) { timers.removeCallbacks(reconnect); reconnectSaved(); } }); }
+            @Override public void onLost(Network network) { runOnUiThread(() -> { if(foreground && !busy) { linked=false; enabled(); scheduleReconnect(); } }); }
+        };
+        try { cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(),networkCallback); }
+        catch(RuntimeException ignored) { networkCallback=null; }
+        reconnectSaved();
+    }
+    @Override protected void onPause() {
+        foreground=false;
+        if(networkCallback!=null) { try { ((ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE)).unregisterNetworkCallback(networkCallback); } catch(RuntimeException ignored) {} networkCallback=null; }
+        generation++; pending=0; busy=false; linked=false; worker.getQueue().clear(); timers.removeCallbacksAndMessages(null);
+        for(RemoteButton b:controls) b.cancelPress(); for(RemoteButton b:panelControls) b.cancelPress(); super.onPause();
+    }
     @Override protected void onDestroy() { generation++; worker.shutdownNow(); if(panel!=null) panel.dismiss(); if(pairing!=null) pairing.dismiss(); super.onDestroy(); }
 }

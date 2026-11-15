@@ -21,7 +21,7 @@ final class ReceiverClient {
         return exchange("/update/install",apk,"application/vnd.android.package-archive","X-Apk-Sha256: "+hash+"\r\n",20000);
     }
     private JSONObject exchange(String route,byte[] payload,String type,String extra,int timeout) throws Exception {
-        try(Socket socket=sockets.createSocket()) {
+        try(Socket socket=openSocket()) {
             socket.setTcpNoDelay(true); socket.connect(new InetSocketAddress(ip,8787),2500); socket.setSoTimeout(timeout);
             String header="POST "+route+" HTTP/1.1\r\nHost: "+ip+":8787\r\nContent-Type: "+type+"\r\nContent-Length: "+payload.length+"\r\nAuthorization: Bearer "+token+"\r\n"+extra+"Connection: close\r\n\r\n";
             ByteArrayOutputStream packet=new ByteArrayOutputStream(); packet.write(header.getBytes(StandardCharsets.US_ASCII)); packet.write(payload);
@@ -31,10 +31,22 @@ final class ReceiverClient {
             String response=new String(raw.toByteArray(),StandardCharsets.UTF_8); int split=response.indexOf("\r\n\r\n");
             if(split<0) throw new IOException("Это не приёмник пульта");
             JSONObject result=new JSONObject(response.substring(split+4));
-            if(response.startsWith("HTTP/1.1 401 ")) throw new SecurityException(result.optString("error","Нужен новый код подключения"));
+            if(response.startsWith("HTTP/1.1 401 ")) throw new AuthenticationException(result.optString("error","Нужен новый код подключения"),"/pair".equals(route)?"":token);
             if(!response.startsWith("HTTP/1.1 200 ")) throw new RemoteException(result.optString("error","Запрос не выполнен"));
             return result;
         }
     }
+    private Socket openSocket() throws IOException {
+        try { return sockets.createSocket(); }
+        catch(SocketException e) {
+            // Some VPNs forbid explicit network binding but route local destinations normally.
+            if(e.getMessage()!=null && e.getMessage().contains("EPERM")) return SocketFactory.getDefault().createSocket();
+            throw e;
+        }
+    }
     static final class RemoteException extends Exception { RemoteException(String message) { super(message); } }
+    static final class AuthenticationException extends SecurityException {
+        final String rejectedToken;
+        AuthenticationException(String message,String rejectedToken) { super(message); this.rejectedToken=rejectedToken; }
+    }
 }

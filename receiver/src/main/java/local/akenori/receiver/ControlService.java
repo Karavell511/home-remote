@@ -17,6 +17,7 @@ import java.util.concurrent.*;
 public class ControlService extends AccessibilityService {
     static volatile ControlService active;
     volatile LocalServer server;
+    private DiscoveryServer discovery;
     volatile String failure="";
     private String currentWindow="";
     private final Handler main=new Handler(Looper.getMainLooper());
@@ -25,10 +26,11 @@ public class ControlService extends AccessibilityService {
         active=this;
         try { NativeKeys.enable(this); } catch(RuntimeException e) { NativeKeys.setup=e.getClass().getSimpleName(); }
         try { server=new LocalServer(this); server.start(); } catch(Exception e) { failure=e.toString(); }
+        if(server!=null) try { discovery=new DiscoveryServer(this,server); discovery.start(); } catch(Exception ignored) {}
     }
     @Override public void onAccessibilityEvent(AccessibilityEvent e) { if(e.getEventType()==AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) { navigator.clear(); currentWindow=String.valueOf(e.getPackageName())+"/"+e.getClassName(); } }
     @Override public void onInterrupt() {}
-    @Override public void onDestroy() { navigator.clear(); if(server!=null) server.close(); active=null; super.onDestroy(); }
+    @Override public void onDestroy() { navigator.clear(); if(discovery!=null) discovery.close(); if(server!=null) server.close(); active=null; super.onDestroy(); }
     String wifiAddress() {
         ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
         for(Network n:cm.getAllNetworks()) {

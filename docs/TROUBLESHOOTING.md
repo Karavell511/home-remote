@@ -3,6 +3,8 @@
 | Symptom | Check |
 | --- | --- |
 | No connection | Same router, current receiver IP, active Accessibility service; guest-network isolation or a VPN may block local traffic |
+| Connection drops after reopening | Install phone 0.9.1 and receiver 0.5.1 over your current apps. Pairing is preserved and the remote retries automatically |
+| Router changed the receiver IP | Keep the remote open. It finds and authenticates the remembered receiver over local UDP discovery. If the router or VPN blocks discovery, allow local network traffic or enter the current IP and leave the code empty to use the saved pairing |
 | Pairing code expired | Generate a new code on the receiver; this revokes the previous phone |
 | Android blocks the Accessibility switch | If available in your firmware, open the receiver's system App Info menu and allow restricted settings, then enable the service yourself |
 | Arrows work in one app but not another | Try the **Экран устройства** panel to activate accessible elements by label; OEM overlays may ignore injected keys |

@@ -31,6 +31,9 @@ final class LocalServer implements Closeable {
         expires=System.currentTimeMillis()+300000; failures=0; blockedUntil=0; paired=false;
     }
     synchronized String pairingCode() { return paired?"Подключено":System.currentTimeMillis()>expires?"Код истёк":pin; }
+    synchronized String discoveryProof(String nonce,String address) throws GeneralSecurityException {
+        return paired?local.homeremote.protocol.DiscoveryProof.sign(token,nonce,address):null;
+    }
     private synchronized String pair(String value) {
         long now=System.currentTimeMillis();
         if(paired || now>expires || now<blockedUntil) return null;
@@ -97,7 +100,9 @@ final class LocalServer implements Closeable {
             }
             if(!Arrays.asList("/status","/key","/ui","/tap","/range","/capabilities","/open_focus","/update/allow","/keyboard/setup","/keyboard/select","/projector/state","/projector/control").contains(route)) { respond(peer,404,error("Неизвестная команда")); return; }
             try { respond(peer,200,owner.call(route,request)); } catch(Exception e) { respond(peer,400,error("Android не выполнил запрос: "+(e.getCause()!=null?e.getCause().getMessage():e.getMessage()))); }
-        } catch(Exception ignored) { /* Malformed or abandoned request; never record credentials or screen content. */ }
+        } catch(Exception ignored) { /* Malformed or abandoned request; never record credentials or screen content. */
+            if((owner.getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0) android.util.Log.w("HomeRemoteServer",ignored.getClass().getSimpleName());
+        }
         finally { peers.remove(socket); }
     }
     private static JSONObject error(String message) throws JSONException { return new JSONObject().put("ok",false).put("error",message); }

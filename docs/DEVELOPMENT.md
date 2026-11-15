@@ -25,7 +25,7 @@ Release variants disable debugging but currently use the developer's local Andro
 python tools/test_protocols.py
 ```
 
-This uses `JAVA_HOME` or `java`/`javac` on PATH. The tests cover ADB framing/authentication/error handling and Bluetooth HID report structure, not physical-device compatibility.
+This uses `JAVA_HOME` or `java`/`javac` on PATH. The tests cover ADB framing, authentication, errors, Bluetooth HID reports and discovery proofs, including replay and address tampering. They do not establish physical device compatibility.
 
 For Android integration, start a **dedicated disposable emulator** at `emulator-5580`, with display size 720×1600 and density 320, install SDK platform-tools on PATH, then run:
 
@@ -33,11 +33,14 @@ For Android integration, start a **dedicated disposable emulator** at `emulator-
 ./gradlew :app:assembleDebug :receiver:assembleDebug :testdriver:assembleDebug
 python tests/receiver_integration.py
 python tests/receiver_client_ui.py
+python tests/receiver_reconnect.py
 ```
 
 `HOME_REMOTE_TEST_SERIAL` can select another emulator. The scripts refuse physical device serials. They enable the receiver Accessibility service and clear only the test phone application's data. UI inspection preserves Accessibility services; ordinary `uiautomator dump` may temporarily suppress them.
 
 The initial local verification passed 38 Android receiver checks plus onboarding, profile selection, haptics and byte-exact receiver download checks. Physical testing covered the Akenori/Jixin projector listed in the README. Other hardware needs its own evidence.
+
+The reconnection suite checks process restart, return from Home, stale IP discovery, WiFi loss and recovery, and receiver service restart. It runs after the UI suite on the same disposable emulator. Pairing keys stay out of test output. Closing the remote stops retries and queued control commands; returning starts a fresh connection without replaying buttons.
 
 ## Projector adapter
 
