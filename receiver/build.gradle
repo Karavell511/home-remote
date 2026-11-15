@@ -1,0 +1,12 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'local.akenori.receiver'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'local.akenori.receiver'; minSdk 24; targetSdk 34
+        versionCode project.hasProperty('receiverTestVersionCode') ? project.property('receiverTestVersionCode').toInteger() : 9
+        versionName project.hasProperty('receiverTestVersionCode') ? '0.3.0-test' : '0.5.0'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+    buildTypes { release { signingConfig signingConfigs.debug; debuggable false; minifyEnabled false } }
+}

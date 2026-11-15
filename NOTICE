@@ -1,0 +1,11 @@
+Home Remote source code and original artwork are licensed under MIT.
+
+The Gradle wrapper scripts and gradle-wrapper.jar originate from Gradle and
+retain their upstream Apache License 2.0 notices.
+The full license is included in licenses/Apache-2.0.txt.
+https://github.com/gradle/gradle
+https://www.apache.org/licenses/LICENSE-2.0
+
+OEM projector APKs, firmware and decompiled manufacturer code are not distributed
+in this repository. Jixin integration calls the installed device's fixed provider
+contracts. Brand and device names identify compatibility and do not imply affiliation.

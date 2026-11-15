@@ -1,0 +1,33 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'local.akenori.remote'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'local.akenori.remote'
+        minSdk 26
+        targetSdk 34
+        versionCode 12
+        versionName '0.9.0'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    buildTypes { release { signingConfig signingConfigs.debug; debuggable false; minifyEnabled false } }
+}
+
+// Generate the matching receiver asset without committing APKs or modifying sources.
+['debug', 'release'].each { variant ->
+    def variantName = variant.capitalize()
+    def generatedAssets = layout.buildDirectory.dir("generated/receiverAssets/${variant}")
+    android.sourceSets.getByName(variant).assets.srcDir(generatedAssets)
+    def bundleReceiver = tasks.register("bundle${variantName}Receiver", Copy) {
+        dependsOn(":receiver:assemble${variantName}")
+        from(project(':receiver').layout.buildDirectory.file("outputs/apk/${variant}/receiver-${variant}.apk"))
+        into(generatedAssets)
+        rename { 'projector-receiver.apk' }
+    }
+    tasks.configureEach { task ->
+        if (task.name == "pre${variantName}Build") task.dependsOn(bundleReceiver)
+    }
+}

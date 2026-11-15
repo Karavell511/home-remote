@@ -1,0 +1,16 @@
+name: Bug report / Ошибка
+description: Describe a reproducible problem with the remote or receiver.
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Phone, screen and app versions
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps, expected result and actual result
+      description: Do not include pairing credentials, device identifiers or personal screenshots.
+    validations:
+      required: true

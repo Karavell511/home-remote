@@ -1,0 +1,27 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <queries><provider android:authorities="jx.servicesmanager.provider;jx.focusmanual.provider;jx.keystone.provider" /><package android:name="com.jixin.settings5" /><intent><action android:name="android.settings.SETTINGS" /></intent><intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.HOME" /></intent></queries>
+    <application android:label="Приёмник пульта" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:allowBackup="false" android:usesCleartextTraffic="false" android:supportsRtl="true" android:icon="@drawable/ic_remote" android:banner="@drawable/tv_banner">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LEANBACK_LAUNCHER" /></intent-filter>
+        </activity>
+        <receiver android:name=".UpdateResultReceiver" android:exported="false">
+            <intent-filter><action android:name="android.intent.action.MY_PACKAGE_REPLACED" /></intent-filter>
+        </receiver>
+        <service android:name=".RemoteInputService" android:exported="true" android:permission="android.permission.BIND_INPUT_METHOD" android:label="Клавиши пульта">
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/remote_input" />
+        </service>
+        <service android:name=".ControlService" android:exported="true" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" android:label="Управление пультом">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/control_service" />
+        </service>
+    </application>
+</manifest>

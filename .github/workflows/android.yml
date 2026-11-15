@@ -1,0 +1,36 @@
+name: Android
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK packages
+        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"'
+      - name: JVM protocol tests
+        run: python3 tools/test_protocols.py
+      - name: Build both APKs and run lint
+        run: ./gradlew --no-daemon :app:assembleDebug :receiver:assembleDebug :app:lintDebug :receiver:lintDebug
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: home-remote-development-apks
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            receiver/build/outputs/apk/debug/receiver-debug.apk
+          retention-days: 14

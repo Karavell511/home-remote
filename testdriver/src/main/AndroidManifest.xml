@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="Remote test driver" android:allowBackup="false">
+        <activity android:name="local.akenori.receiver.NavigationFixtureActivity" android:exported="true" />
+        <activity android:name="local.akenori.receiver.HardwareKeyFixtureActivity" android:exported="true" />
+    </application>
+    <instrumentation android:name="local.akenori.receiver.DumpInstrumentation" android:targetPackage="local.akenori.testdriver" />
+</manifest>
