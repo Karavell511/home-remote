@@ -10,6 +10,7 @@ final class RemoteIcon extends Drawable {
     @Override public void draw(Canvas c) {
         int save=c.save(); Rect b=getBounds(); c.translate(b.left,b.top); c.scale(b.width()/24f,b.height()/24f);
         switch(name) {
+            case "power": c.drawArc(new RectF(4,4,20,21),-55,290,false,pen); line(c,12,2,12,11); break;
             case "up": line(c,6,14,12,8,18,14); break;
             case "down": line(c,6,10,12,16,18,10); break;
             case "left": line(c,14,6,8,12,14,18); break;

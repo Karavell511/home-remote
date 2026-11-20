@@ -1,0 +1,11 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["app/src/main/java", "receiver/src/main/java"],
+  "locale": "ru-RU",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Form", "Scrollbar", "Toast", "Select/Listbox"],
+  "ownership": {"Select/Listbox": "native"},
+  "requiredCommands": [],
+  "commands": {},
+  "evidence": {"failurePaths": "tests/receiver_reconnect.py"}
+}

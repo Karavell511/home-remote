@@ -15,10 +15,10 @@ public class MainActivity extends Activity {
     private TextView state,code,updateState;
     private Button updates;
     private final Runnable refresh=new Runnable() { public void run() {
-        ControlService service=ControlService.active;
-        if(service==null) { state.setText("1. Разреши управление\nВ специальных возможностях включи «Управление пультом» и вернись сюда."); code.setText(""); }
+        ReceiverService service=ReceiverService.active;
+        if(service==null) { state.setText(ReceiverService.shouldRun(MainActivity.this)?"Приёмник запускается…":"1. Разреши управление\nВ специальных возможностях включи «Управление пультом» и вернись сюда."); code.setText(""); }
         else if(service.server==null) { state.setText("Не удалось запустить приёмник: "+service.failure); code.setText(""); }
-        else { String ip=service.wifiAddress(); state.setText((ip.isEmpty()?"Подключи устройство к домашней сети по Wi-Fi или Ethernet.":"IP устройства: "+ip)+"\n2. На телефоне: Пульт → Подключить.\nВведи этот IP и код ниже."); String value=ip.isEmpty()?"":service.server.pairingCode(); code.setText(value); code.setTextSize(value.matches("[0-9]{6}")?60:24); }
+        else { String ip=service.wifiAddress(); boolean paired=!getSharedPreferences("pairing",0).getString("token","").isEmpty(); state.setText((ip.isEmpty()?"Подключи устройство к домашней сети по Wi-Fi или Ethernet.":"IP устройства: "+ip)+(paired?"\nТелефон сохранён. Просто открой пульт на телефоне.\nПриёмник запускается автоматически после включения.":"\nНа телефоне: Пульт → Подключить → Найти устройства.\nКод ниже нужен только для первого подключения.")); String value=ip.isEmpty()?"":service.server.pairingCode(); code.setText(value); code.setTextSize(value.matches("[0-9]{6}")?60:24); }
         try { ReceiverUpdater updater=new ReceiverUpdater(MainActivity.this); org.json.JSONObject info=updater.info(); updateState.setText("Версия "+info.getString("versionName")+" · "+info.getString("message")); updates.setText(ReceiverUpdater.confirmation!=null?"Подтвердить обновление":updater.canInstall()?"Обновления по Wi-Fi разрешены":"Разрешить обновления по Wi-Fi"); } catch(Exception ignored) {}
         timer.postDelayed(this,1000);
     }};
@@ -37,9 +37,13 @@ public class MainActivity extends Activity {
         Button allow=button("Разрешить управление",actions);
         allow.setOnClickListener(v -> { try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); } catch(RuntimeException e) { Toast.makeText(this,"Открой настройки Android → Специальные возможности → Управление пультом",Toast.LENGTH_LONG).show(); } });
         Button renew=button("Новый код подключения",actions);
-        renew.setOnClickListener(v -> { ControlService s=ControlService.active; if(s!=null && s.server!=null) s.server.newPairing(); });
+        renew.setOnClickListener(v -> {
+            Runnable reset=() -> { ReceiverService s=ReceiverService.active; if(s!=null && s.server!=null) s.server.newPairing(); };
+            if(getSharedPreferences("pairing",0).getString("token","").isEmpty()) reset.run();
+            else new AlertDialog.Builder(this).setTitle("Заменить подключённый телефон?").setMessage("Новый код отключит сохранённый телефон. Для обычного подключения достаточно открыть на нём пульт.").setNegativeButton("Отмена",null).setPositiveButton("Заменить телефон",(dialog,which) -> reset.run()).show();
+        });
         Button stop=button("Остановить управление",actions);
-        stop.setOnClickListener(v -> { getSharedPreferences("pairing",0).edit().clear().commit(); if(ControlService.active!=null) { NativeKeys.restore(ControlService.active); ControlService.active.disableSelf(); } });
+        stop.setOnClickListener(v -> { getSharedPreferences("receiver",0).edit().putBoolean("enabled",false).commit(); getSharedPreferences("pairing",0).edit().clear().commit(); stopService(new Intent(this,ReceiverService.class)); if(ControlService.active!=null) { NativeKeys.restore(ControlService.active); ControlService.active.disableSelf(); } });
         updates=button("Разрешить обновления по Wi-Fi",actions);
         updates.setOnClickListener(v -> { try { if(ReceiverUpdater.confirmation!=null) startActivity(new Intent(ReceiverUpdater.confirmation)); else if(!new ReceiverUpdater(this).canInstall()) new ReceiverUpdater(this).allow(); } catch(RuntimeException e) { Toast.makeText(this,"Открой в настройках Android разрешение на установку для «Приёмника пульта»",Toast.LENGTH_LONG).show(); } });
         Button instructions=button("Инструкция и совместимость",actions); instructions.setOnClickListener(v -> help());
@@ -57,6 +61,6 @@ public class MainActivity extends Activity {
     private GradientDrawable shape(int color) { GradientDrawable d=new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(16)); return d; }
     private LinearLayout.LayoutParams params(int w,int h,int top) { LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(w<0?w:dp(w),h<0?h:dp(h)); p.topMargin=dp(top); return p; }
     private int dp(int n) { return Math.round(n*getResources().getDisplayMetrics().density); }
-    @Override protected void onResume() { super.onResume(); timer.removeCallbacks(refresh); timer.post(refresh); }
+    @Override protected void onResume() { super.onResume(); ReceiverService.start(this); timer.removeCallbacks(refresh); timer.post(refresh); }
     @Override protected void onPause() { timer.removeCallbacksAndMessages(null); super.onPause(); }
 }

@@ -53,6 +53,10 @@ def renew():
     node = next(n for n in ui().iter('node') if n.get('text', '').casefold() == 'Новый код подключения'.casefold())
     x1,y1,x2,y2 = map(int,re.findall(r'\d+',node.get('bounds')))
     adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
+    confirmation=next((n for n in ui().iter('node') if n.get('text','').casefold()=='Заменить телефон'.casefold()),None)
+    if confirmation is not None:
+        x1,y1,x2,y2=map(int,re.findall(r'\d+',confirmation.get('bounds')))
+        adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
     time.sleep(1.2)
     return code()
 
@@ -66,6 +70,8 @@ pin = renew()
 check(call('/health',method='GET')[1].get('service')=='akenori-receiver','health')
 check(call('/status',{})[0]==401,'unauthorized status denied')
 check(call('/key',{'key':'home'})[0]==401,'unauthorized command denied')
+check(call('/diagnostics/power',{})[0]==401,'unauthorized hardware diagnostics denied')
+check(call('/power/control',{'action':'projection_off'})[0]==401,'unauthorized power command denied')
 wrong = '000000' if pin!='000000' else '000001'
 check(call('/pair',{'pin':wrong})[0]==401,'wrong PIN denied')
 status, result = call('/pair',{'pin':pin})
@@ -73,9 +79,14 @@ check(status==200 and len(result.get('token',''))==64,'pair with PIN')
 token = result['token']
 check(call('/pair',{'pin':pin})[0]==401,'PIN single use')
 check(call('/status',{},token)[1].get('accessibility') is True,'Android service active')
+muted=call('/key',{'key':'mute'},token)[1]
+restored=call('/key',{'key':'mute'},token)[1]
+check(muted.get('ok') is True and isinstance(muted.get('muted'),bool),'mute reports actual audio state')
+check(restored.get('muted') is not muted.get('muted'),'second mute restores sound state')
 check(call('/status',{},token+'x')[0]==401,'wrong token denied')
 check(call('/shell',{'command':'id'},token)[0]==404,'unknown route denied')
 check(call('/key',{'key':'factory_reset'},token)[0]==400,'unknown command denied')
+check(call('/power/control',{'action':'factory_reset'},token)[0]==400,'unknown power action denied')
 check(call('/key',{'key':'home'},token)[1].get('ok') is True,'home accepted')
 time.sleep(.5)
 check('launcher' in adb('shell','dumpsys','activity','activities').lower(),'launcher opened')

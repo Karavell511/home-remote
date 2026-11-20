@@ -5,8 +5,8 @@ android {
     sourceSets.main.java.srcDir '../common/src/main/java'
     defaultConfig {
         applicationId 'local.akenori.receiver'; minSdk 24; targetSdk 34
-        versionCode project.hasProperty('receiverTestVersionCode') ? project.property('receiverTestVersionCode').toInteger() : 10
-        versionName project.hasProperty('receiverTestVersionCode') ? '0.3.0-test' : '0.5.1'
+        versionCode project.hasProperty('receiverTestVersionCode') ? project.property('receiverTestVersionCode').toInteger() : 13
+        versionName project.hasProperty('receiverTestVersionCode') ? '0.3.0-test' : '0.7.1'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
     buildTypes { release { signingConfig signingConfigs.debug; debuggable false; minifyEnabled false } }

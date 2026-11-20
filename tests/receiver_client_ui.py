@@ -40,6 +40,7 @@ adb('install','-r',str(ROOT/'app/build/outputs/apk/debug/app-debug.apk'))
 adb('shell','pm','clear','local.akenori.remote')
 adb('shell','am','start','-W','-n','local.akenori.receiver/.MainActivity')
 tap('Новый код подключения')
+if any(n.get('text','').casefold()=='Заменить телефон'.casefold() for n in ui().iter('node')):tap('Заменить телефон')
 time.sleep(1)
 pin=next(n.get('text') for n in ui().iter('node') if re.fullmatch(r'\d{6}',n.get('text','')))
 ip=re.search(r'inet (\d+\.\d+\.\d+\.\d+)',adb('shell','ip','-f','inet','addr','show','wlan0')).group(1)
@@ -64,10 +65,17 @@ assert any(n.get('text')=='В сети' for n in tree.iter('node')),'Native Wi-F
 assert any(n.get('text')=='OK' and n.get('enabled')=='true' for n in tree.iter('node')),'Controls remain disabled'
 tap('Как подключить · Инструкция');tap('Проектор');tap('Открыть пульт');time.sleep(.5)
 tree=ui()
-for title in ('Фокус','Масштаб','Трапеция','Углы'):
-    assert any(n.get('text','').startswith(title+'\n') for n in tree.iter('node')),'Missing image setting '+title
+for label in ('F−','F+'):
+    assert any(n.get('text')==label and n.get('enabled')=='true' for n in tree.iter('node')),'Missing main-screen focus key '+label
 png=subprocess.check_output([ADB,'-s',SERIAL,'exec-out','screencap','-p'],timeout=12)
 (ROOT/'verification/remote-current-emulator.png').write_bytes(png)
+tap('Настройки изображения')
+visible_titles=set()
+for _ in range(3):
+    visible_titles.update(n.get('text','').split('\n')[0] for n in ui().iter('node'))
+    if all(title in visible_titles for title in ('Фокус','Масштаб','Трапеция','Углы')):break
+    adb('shell','input','swipe','705','1400','705','650','250')
+assert all(title in visible_titles for title in ('Фокус','Масштаб','Трапеция','Углы')),'Image setting missing from expanded section'
 tap('Экран устройства');time.sleep(.5)
 tree=ui()
 assert any('Нажимай пункты меню' in n.get('text','') for n in tree.iter('node')),'No UI returned to native client'

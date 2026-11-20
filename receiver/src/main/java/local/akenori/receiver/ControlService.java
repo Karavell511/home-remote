@@ -16,36 +16,32 @@ import java.util.concurrent.*;
 
 public class ControlService extends AccessibilityService {
     static volatile ControlService active;
-    volatile LocalServer server;
-    private DiscoveryServer discovery;
-    volatile String failure="";
     private String currentWindow="";
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ScreenNavigator navigator=new ScreenNavigator();
     @Override protected void onServiceConnected() {
         active=this;
         try { NativeKeys.enable(this); } catch(RuntimeException e) { NativeKeys.setup=e.getClass().getSimpleName(); }
-        try { server=new LocalServer(this); server.start(); } catch(Exception e) { failure=e.toString(); }
-        if(server!=null) try { discovery=new DiscoveryServer(this,server); discovery.start(); } catch(Exception ignored) {}
+        getSharedPreferences("receiver",0).edit().putBoolean("enabled",true).apply();
+        ReceiverService.start(this);
     }
     @Override public void onAccessibilityEvent(AccessibilityEvent e) { if(e.getEventType()==AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) { navigator.clear(); currentWindow=String.valueOf(e.getPackageName())+"/"+e.getClassName(); } }
     @Override public void onInterrupt() {}
-    @Override public void onDestroy() { navigator.clear(); if(discovery!=null) discovery.close(); if(server!=null) server.close(); active=null; super.onDestroy(); }
-    String wifiAddress() {
-        ConnectivityManager cm=(ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
-        for(Network n:cm.getAllNetworks()) {
-            NetworkCapabilities caps=cm.getNetworkCapabilities(n); LinkProperties links=cm.getLinkProperties(n);
-            if(caps==null || links==null || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) || !(caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) continue;
-            for(LinkAddress a:links.getLinkAddresses()) if(a.getAddress() instanceof Inet4Address && a.getAddress().isSiteLocalAddress()) return a.getAddress().getHostAddress();
-        }
-        return "";
-    }
+    @Override public void onDestroy() { navigator.clear(); if(active==this) active=null; if(!ReceiverService.shouldRun(this)) stopService(new Intent(this,ReceiverService.class)); super.onDestroy(); }
     JSONObject call(String route,JSONObject request) throws Exception {
         FutureTask<JSONObject> task=new FutureTask<>(() -> perform(route,request)); main.post(task);
         try { return task.get(5,TimeUnit.SECONDS); } catch(TimeoutException e) { task.cancel(false); throw e; }
     }
     private JSONObject perform(String route,JSONObject request) throws Exception {
         JSONObject result=new JSONObject();
+        if("/diagnostics/power".equals(route)) return PowerDiagnostics.read();
+        if("/power/state".equals(route)) return new JixinProjector(this).powerState();
+        if("/power/control".equals(route)) {
+            String action=request.getString("action");
+            if(action.equals("projection_on") || action.equals("projection_off")) return new JixinProjector(this).projection(action.equals("projection_on"));
+            if(action.equals("menu")) return result.put("ok",performGlobalAction(GLOBAL_ACTION_POWER_DIALOG)).put("message","Выбери действие в меню питания проектора");
+            throw new IllegalArgumentException("Неизвестная команда питания");
+        }
         if("/projector/state".equals(route)) return new JixinProjector(this).state();
         if("/projector/control".equals(route)) return new JixinProjector(this).command(request);
         if("/capabilities".equals(route)) return new ProjectorCapabilities(this).read();
@@ -125,7 +121,12 @@ public class ControlService extends AccessibilityService {
         if(key.equals("home")) ok=performGlobalAction(GLOBAL_ACTION_HOME);
         else if(key.equals("back")) ok=performGlobalAction(GLOBAL_ACTION_BACK);
         else if(key.equals("settings")) { startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); ok=true; }
-        else if(key.equals("volume_down") || key.equals("volume_up")) {
+        else if(key.equals("mute")) {
+            AudioManager audio=(AudioManager)getSystemService(AUDIO_SERVICE);
+            audio.adjustStreamVolume(AudioManager.STREAM_MUSIC,AudioManager.ADJUST_TOGGLE_MUTE,AudioManager.FLAG_SHOW_UI);
+            boolean muted=audio.isStreamMute(AudioManager.STREAM_MUSIC);
+            return result.put("ok",true).put("muted",muted).put("message",muted?"Звук выключен":"Звук включён");
+        } else if(key.equals("volume_down") || key.equals("volume_up")) {
             ((AudioManager)getSystemService(AUDIO_SERVICE)).adjustStreamVolume(AudioManager.STREAM_MUSIC,key.equals("volume_up")?AudioManager.ADJUST_RAISE:AudioManager.ADJUST_LOWER,AudioManager.FLAG_SHOW_UI); ok=true;
         } else if(key.equals("scroll_down") || key.equals("scroll_up")) {
             AccessibilityNodeInfo root=getRootInActiveWindow(); ArrayDeque<AccessibilityNodeInfo> queue=new ArrayDeque<>(); if(root!=null) queue.add(root); int visited=0;

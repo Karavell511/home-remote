@@ -12,6 +12,21 @@ final class JixinProjector {
     private static final java.util.concurrent.ConcurrentHashMap<String,String> authorities=new java.util.concurrent.ConcurrentHashMap<>();
     private static volatile ClassLoader oemClasses;
     JixinProjector(Context context) { this.context=context; }
+    boolean supportsFocus() {
+        try { return context.getPackageManager().resolveContentProvider(authority("FocusManualService"),0)!=null; }
+        catch(RuntimeException e) { return false; }
+    }
+    JSONObject powerState() throws Exception {
+        Bundle state=call("DeviceService","device","isStandbyScreen",null);
+        if(!state.containsKey("isStandbyScreen")) throw new IllegalStateException("Проектор не сообщает состояние проекции");
+        return new JSONObject().put("ok",true).put("projectionControl",true).put("projectionOn",!state.getBoolean("isStandbyScreen"));
+    }
+    JSONObject projection(boolean on) throws Exception {
+        JSONObject before=powerState();
+        if(before.getBoolean("projectionOn")!=on) call("DeviceService","device",on?"wakeupScreen":"standbyScreen",null);
+        JSONObject after=powerState();
+        return after.put("ok",after.getBoolean("projectionOn")==on).put("message",after.getBoolean("projectionOn")==on?(on?"Проекция включена":"Проекция выключена. Wi-Fi остаётся доступен."):"Проектор не подтвердил изменение проекции");
+    }
     private String authority(String service) {
         String known=authorities.get(service); if(known!=null) return known;
         Bundle query=new Bundle(); query.putString("serviceName",service);
@@ -43,7 +58,13 @@ final class JixinProjector {
         return apk;
     }
     JSONObject state() throws Exception {
-        JSONObject state=new JSONObject().put("ok",true).put("focusAuthority",authority("FocusManualService")).put("keystoneAuthority",authority("KeystoneService"));
+        JSONObject state=new JSONObject().put("ok",true).put("directFocus",supportsFocus());
+        if(state.optBoolean("directFocus")) {
+            state.put("focusAuthority",authority("FocusManualService"));
+            try { state.put("focusLimits",limits()); } catch(Exception e) { state.put("focusLimitsError",e.getClass().getSimpleName()); }
+        }
+        try {
+        state.put("keystoneAuthority",authority("KeystoneService"));
         for(String field:new String[]{"angleByHorizontal","angleByVertical","angleByRotate"}) {
             Bundle value=call("KeystoneService","keystone",field,null);
             if(value.containsKey(field)) state.put(field,value.getInt(field));
@@ -52,10 +73,13 @@ final class JixinProjector {
         catch(Exception e) { state.put("pointsError",e.getClass().getSimpleName()+": "+e.getMessage()); }
         Bundle scale=call("KeystoneService","keystone","readCurrentScreenPercentage",null);
         if(scale.containsKey("key")) state.put("scale",scale.getFloat("key"));
-        state.put("focusLimits",limits());
         for(String mode:new String[]{"OrthographicForward","HoistingForward","OrthographicRear","HoistingRear"}) {
             Bundle value=call("ProjectorTypeService","projectorType","is"+mode,null);
             if(value.getBoolean("is"+mode)) state.put("projection",Character.toLowerCase(mode.charAt(0))+mode.substring(1));
+        }
+        } catch(Exception e) {
+            if(!state.optBoolean("directFocus") && !state.has("keystoneAuthority")) throw e;
+            state.put("geometryError",e.getClass().getSimpleName());
         }
         return state;
     }

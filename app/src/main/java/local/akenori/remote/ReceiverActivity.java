@@ -19,6 +19,8 @@ import javax.net.SocketFactory;
 public class ReceiverActivity extends Activity {
     private static final int BG=0xfff3f2ec,INK=0xff192b24,MUTED=0xff69736b,LINE=0xffdce1d6,LIME=0xffc9e79a,DARK=0xff1a2b24,WHITE=0xfffcfdf8;
     private final ThreadPoolExecutor worker=new ThreadPoolExecutor(1,1,0,TimeUnit.SECONDS,new LinkedBlockingQueue<>());
+    private final ExecutorService infraredWorker=Executors.newSingleThreadExecutor();
+    private boolean infraredBusy; private long lastInfrared;
     private final Handler timers=new Handler(Looper.getMainLooper());
     private final ArrayList<RemoteButton> controls=new ArrayList<>(),panelControls=new ArrayList<>();
     private final ArrayList<SeekBar> panelSliders=new ArrayList<>();
@@ -27,13 +29,31 @@ public class ReceiverActivity extends Activity {
     private Dialog panel; private LinearLayout panelItems; private AlertDialog pairing;
     private boolean foreground,automaticConnection; private int reconnectAttempt; private long attemptedUpdate=-1;
     private ConnectivityManager.NetworkCallback networkCallback;
+    private boolean directFocus,probing;
+    private final Runnable heartbeat=new Runnable() { public void run() {
+        if(!foreground) return;
+        if(linked && !busy && pending==0 && !probing) {
+            probing=true; int current=generation; ReceiverClient destination=client;
+            worker.execute(() -> {
+                try {
+                    JSONObject response=destination.request("/status",new JSONObject());
+                    runOnUiThread(() -> { if(current!=generation || !foreground) return; probing=false;
+                        if(!response.optBoolean("accessibility",true)) failure(new java.io.IOException("Служба управления запускается"));
+                    });
+                } catch(Exception e) { runOnUiThread(() -> { if(current==generation && foreground) { probing=false; automaticConnection=true; failure(e); } }); }
+            });
+        }
+        timers.postDelayed(this,5000);
+    }};
     private final Runnable reconnect=this::reconnectSaved;
     private JSONObject receiverStatus; private ReceiverUpdate bundledUpdate;
     private String adjustment="", selectedCorner="lt";
     private JSONObject projectorState;
     private TextView adjustmentValue;
     private RemoteButton nextPage;
-    private LinearLayout imageSection;
+    private LinearLayout imageSection,focusSection;
+    private RemoteButton imageToggle;
+    private boolean imageExpanded;
     private RemoteButton tvSettings;
     private TextView brand;
     private final Runnable refreshPanel=() -> { if(panel!=null && panel.isShowing() && linked && !busy && pending==0) readPanel(); };
@@ -46,30 +66,40 @@ public class ReceiverActivity extends Activity {
         LinearLayout page=column(); page.setPadding(dp(22),dp(18),dp(22),dp(28)); scroll.addView(page); setContentView(scroll);
         LinearLayout identity=row(); identity.setGravity(Gravity.CENTER_VERTICAL); page.addView(identity);
         ImageView logo=new ImageView(this); logo.setImageResource(R.drawable.ic_remote); logo.setContentDescription("Домашний пульт"); identity.addView(logo,new LinearLayout.LayoutParams(dp(36),dp(36)));
-        brand=text("ДОМАШНИЙ ПУЛЬТ",11,MUTED); brand.setPadding(dp(10),0,0,0); brand.setLetterSpacing(.12f); identity.addView(brand);
+        brand=text("ДОМАШНИЙ ПУЛЬТ",11,MUTED); brand.setPadding(dp(10),0,0,0); brand.setLetterSpacing(.12f); identity.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        RemoteButton power=button("","power",WHITE,INK,20,() -> power()); power.setContentDescription("Питание проектора"); identity.addView(power,new LinearLayout.LayoutParams(dp(48),dp(48)));
         LinearLayout header=row(); header.setGravity(Gravity.CENTER_VERTICAL); page.addView(header,lp(-1,54,5));
         TextView title=text("Пульт",32,INK); title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL)); header.addView(title,new LinearLayout.LayoutParams(0,-2,1));
-        connection=button("Подключить","wifi",WHITE,INK,14,() -> pairing()); header.addView(connection,new LinearLayout.LayoutParams(dp(116),dp(42)));
-        imageSection=column(); page.addView(imageSection);
-        TextView section=text("ИЗОБРАЖЕНИЕ",11,MUTED); section.setLetterSpacing(.12f); imageSection.addView(section,lp(-1,-2,20));
-        LinearLayout first=row(); imageSection.addView(first,lp(-1,90,10));
+        connection=button("Подключить","wifi",WHITE,INK,14,() -> connectionOptions()); header.addView(connection,new LinearLayout.LayoutParams(dp(132),dp(48)));
+        focusSection=column(); page.addView(focusSection);
+        TextView section=text("ФОКУСИРОВКА ЛИНЗЫ",11,MUTED); section.setLetterSpacing(.12f); focusSection.addView(section,lp(-1,-2,14));
+        LinearLayout focusKeys=row(); focusSection.addView(focusKeys,lp(-1,58,8));
+        quickFocus(focusKeys,"F−","focus_minus"); quickFocus(focusKeys,"F+","focus_plus");
+        imageSection=column();
+        boolean singleColumn=getResources().getConfiguration().screenWidthDp<340 || getResources().getConfiguration().fontScale>1.2f;
+        LinearLayout first=row(); if(singleColumn) first.setOrientation(LinearLayout.VERTICAL); imageSection.addView(first,lp(-1,-2,10));
         tile(first,"Фокус","Резкость линзы","focus",true,() -> openSetting("Фокус",new String[]{"Фокус","Фокусировка","Настройка фокуса","Электронная фокусировка","Focus","Focus adjustment"}));
         tile(first,"Масштаб","Размер кадра","scale",false,() -> openSetting("Масштаб",new String[]{"Масштабирование экрана","Масштаб","Zoom"}));
-        LinearLayout second=row(); imageSection.addView(second,lp(-1,90,10));
+        LinearLayout second=row(); if(singleColumn) second.setOrientation(LinearLayout.VERTICAL); imageSection.addView(second,lp(-1,-2,10));
         tile(second,"Трапеция","Наклон сторон","keystone",false,() -> openSetting("Трапеция",new String[]{"Настройка трапеции","Коррекция трапеции","Keystone"}));
         tile(second,"Углы","Выравнивание","align",false,() -> openSetting("Выравнивание",new String[]{"Четырехточечное трапециальное искажение","Четырёхточечная коррекция","4-point keystone"}));
         RemoteButton rotate=button("Положение изображения","rotate",WHITE,INK,15,() -> openSetting("Положение изображения",new String[]{"Режим проекции","Метод проецирования","Projection mode"})); controls.add(rotate); imageSection.addView(rotate,lp(-1,48,10));
         tvSettings=button("Настройки телевизора","settings",WHITE,INK,16,() -> allSettings()); controls.add(tvSettings); page.addView(tvSettings,lp(-1,54,16));
         LinearLayout remote=column(); remote.setPadding(dp(16),dp(12),dp(16),dp(12)); remote.setBackground(shape(DARK,28)); page.addView(remote,lp(-1,-2,20));
         LinearLayout meta=row(); TextView remoteLabel=text("ПУЛЬТ",11,0xffa9b7ab); remoteLabel.setLetterSpacing(.14f); meta.addView(remoteLabel,new LinearLayout.LayoutParams(0,-2,1)); latency=text("",11,0xffa9b7ab); meta.addView(latency); remote.addView(meta);
-        FrameLayout pad=new FrameLayout(this); LinearLayout.LayoutParams padLayout=lp(252,228,0); padLayout.gravity=Gravity.CENTER; remote.addView(pad,padLayout);
+        int padWidth=Math.min(252,Math.max(200,getResources().getConfiguration().screenWidthDp-76));
+        FrameLayout pad=new FrameLayout(this); LinearLayout.LayoutParams padLayout=lp(padWidth,Math.round(228f*padWidth/252),0); padLayout.gravity=Gravity.CENTER; remote.addView(pad,padLayout);
         padKey(pad,"Вверх","up",90,0,72,66); padKey(pad,"Влево","left",10,78,72,72);
         RemoteButton ok=button("OK",null,LIME,DARK,22,null); ok.setTypeface(null,Typeface.BOLD); ok.instant(() -> key("ok"),false); controls.add(ok); frame(pad,ok,86,76,80,76);
         padKey(pad,"Вправо","right",170,78,72,72); padKey(pad,"Вниз","down",90,160,72,66);
         status=text("Подключи устройство к домашней сети",13,0xffd3ddcf); status.setGravity(Gravity.CENTER); status.setMinHeight(dp(32)); status.setMaxLines(2); status.setEllipsize(TextUtils.TruncateAt.END); remote.addView(status,lp(-1,-2,0));
         LinearLayout nav=row(); page.addView(nav,lp(-1,52,10)); navKey(nav,"Назад","back"); navKey(nav,"Домой","home"); navKey(nav,"Меню","menu");
         LinearLayout sound=row(); page.addView(sound,lp(-1,52,10));
-        soundKey(sound,"Тише","sound_minus","volume_down"); soundKey(sound,"Громче","sound_plus","volume_up");
+        soundKey(sound,"Тише","sound_minus","volume_down");
+        RemoteButton mute=button("Звук",null,WHITE,INK,14,null); mute.setContentDescription("Включить или выключить звук"); mute.instant(() -> key("mute"),false); controls.add(mute); sound.addView(mute,weighted(52,4));
+        soundKey(sound,"Громче","sound_plus","volume_up");
+        imageToggle=button("Настройки изображения","settings",WHITE,INK,16,() -> { imageExpanded=!imageExpanded; updateDeviceKind(); }); page.addView(imageToggle,lp(-1,52,14));
+        page.addView(imageSection);
         RemoteButton screen=button("Экран устройства","screen",WHITE,INK,16,() -> { if(ready()) { showPanel("Экран устройства"); readPanel(); } }); controls.add(screen); page.addView(screen,lp(-1,52,14));
         LinearLayout footer=row(); footer.setGravity(Gravity.CENTER_VERTICAL); page.addView(footer,lp(-1,52,12));
         Switch haptics=new Switch(this); haptics.setText("Виброотклик"); haptics.setTextSize(14); haptics.setTextColor(MUTED); haptics.setChecked(getSharedPreferences("remote_ui",0).getBoolean("haptics",true)); footer.addView(haptics,new LinearLayout.LayoutParams(0,-1,1));
@@ -79,16 +109,91 @@ public class ReceiverActivity extends Activity {
         updateDeviceKind(); enabled();
     }
     private void options() {
-        new AlertDialog.Builder(this).setTitle("Домашний пульт").setItems(new String[]{"Подключение к устройству","Установить приёмник на ТВ / проектор","Обновления по Wi-Fi","Все настройки устройства","Bluetooth и другие устройства","Инструкция и выбор устройства"},(d,index) -> {
-            if(index==0) pairing(); else if(index==1) startActivity(new Intent(this,InstallReceiverActivity.class));
+        new AlertDialog.Builder(this).setTitle("Домашний пульт").setItems(new String[]{"Подключение к устройству","Установить приёмник на ТВ / проектор","Обновления по Wi-Fi","Все настройки устройства","Bluetooth и другие устройства","Инструкция и выбор устройства","Тип устройства: проектор / ТВ"},(d,index) -> {
+            if(index==0) connectionOptions(); else if(index==1) startActivity(new Intent(this,InstallReceiverActivity.class));
             else if(index==2) updates();
             else if(index==3) allSettings();
             else if(index==4) startActivity(new Intent(this,MainActivity.class).putExtra("legacy",true));
+            else if(index==6) new AlertDialog.Builder(this).setTitle("Тип устройства").setItems(new String[]{"Проектор · с фокусировкой","Телевизор"},(dialog,kind) -> { getSharedPreferences("remote_ui",0).edit().putString("device_kind",kind==0?"projector":"tv").apply(); updateDeviceKind(); }).show();
             else startActivity(new Intent(this,GuideActivity.class));
         }).show();
     }
     private void allSettings() { if(!ready()) return; showPanel("Все настройки"); operation(() -> { client.request("/key",new JSONObject().put("key","settings")); Thread.sleep(180); JSONObject screen=client.request("/ui",new JSONObject()); runOnUiThread(() -> renderPanel(screen)); return "Настройки устройства"; },message -> { if(panelMessage!=null) panelMessage.setText(message); }); }
-    private void updateDeviceKind() { boolean television=getSharedPreferences("remote_ui",0).getString("device_kind","projector").equals("tv"); imageSection.setVisibility(television?View.GONE:View.VISIBLE); tvSettings.setVisibility(television?View.VISIBLE:View.GONE); brand.setText(television?"ДОМАШНИЙ ПУЛЬТ · ТВ":"ДОМАШНИЙ ПУЛЬТ · ПРОЕКТОР"); }
+    private void updateDeviceKind() {
+        boolean television=!getPreferences(0).getBoolean("known_projector",false) && getSharedPreferences("remote_ui",0).getString("device_kind","projector").equals("tv");
+        focusSection.setVisibility(television?View.GONE:View.VISIBLE); imageToggle.setVisibility(television?View.GONE:View.VISIBLE);
+        imageToggle.setText(imageExpanded?"Скрыть настройки изображения":"Настройки изображения");
+        imageToggle.setContentDescription(imageExpanded?"Настройки изображения, развёрнуто":"Настройки изображения, свёрнуто");
+        imageSection.setVisibility(!television && imageExpanded?View.VISIBLE:View.GONE); tvSettings.setVisibility(television?View.VISIBLE:View.GONE);
+        brand.setText(television?"ТЕЛЕВИЗОР":"ПРОЕКТОР");
+    }
+    private void power() {
+        LinearLayout body=column(); body.setPadding(dp(20),dp(8),dp(20),0);
+        boolean infrared=InfraredRemote.available(this) && !getPreferences(0).getString("ir_profile","").isEmpty();
+        boolean verifiedIr=infrared && getPreferences(0).getString("ir_profile","").equals(getPreferences(0).getString("ir_confirmed_profile",""));
+        body.addView(text("По Wi-Fi можно погасить и вернуть проекцию на совместимом Jixin. После полного выключения Android связь по сети недоступна.",14,MUTED));
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Питание проектора").setView(body).setNegativeButton("Закрыть",null).create();
+        if(verifiedIr) {
+            body.addView(button("Вкл. / выкл. через ИК","power",LIME,INK,16,() -> { dialog.dismiss(); infrared("power"); }),lp(-1,56,12));
+        }
+        for(boolean on:new boolean[]{true,false}) {
+            RemoteButton button=button(on?"Включить проекцию по Wi-Fi":"Выключить проекцию по Wi-Fi",null,WHITE,INK,15,() -> { dialog.dismiss(); projection(on); });
+            button.setEnabled(linked && !busy && getPreferences(0).getBoolean("projection_control",false)); body.addView(button,lp(-1,56,8));
+        }
+        body.addView(text("Выключение проекции гасит свет, но сохраняет Android и Wi-Fi. Звук выключается отдельно кнопкой «Звук».",12,MUTED),lp(-1,-2,10));
+        RemoteButton menu=button("Полное выключение · меню Android",null,WHITE,INK,14,() -> {
+            dialog.dismiss(); if(!ready()) return; showPanel("Питание Android");
+            operation(() -> { JSONObject result=client.request("/power/control",new JSONObject().put("action","menu")); if(!result.optBoolean("ok")) return "Android не открыл меню питания";
+                Thread.sleep(250); JSONObject screen=client.request("/ui",new JSONObject()); runOnUiThread(() -> renderPanel(screen)); return "После полного выключения понадобится кнопка проектора или совместимый ИК-пульт";
+            },message -> { if(panelMessage!=null) panelMessage.setText(message); });
+        }); menu.setEnabled(linked && !busy); body.addView(menu,lp(-1,56,8));
+        if(infrared) {
+            body.addView(text(verifiedIr?"Направляй верхний торец телефона на ИК-приёмник проектора. Холодное включение нужно проверить отдельно.":"ИК-включение пока не проверено. В прошивке найдены коды, но они могут не подходить к родному пульту.",12,MUTED),lp(-1,-2,12));
+            body.addView(button("Проверить ИК: Домой","home",WHITE,INK,14,() -> { dialog.dismiss();
+                new AlertDialog.Builder(this).setTitle("Проверка ИК").setMessage("Направь верхний торец телефона на ИК-приёмник проектора. Открой любое меню проектора, чтобы проверить возврат на главный экран.")
+                    .setPositiveButton("Отправить «Домой»",(d,w) -> infrared("home")).setNegativeButton("Отмена",null).show();
+            }),lp(-1,52,8));
+        }
+        ScrollView scroll=new ScrollView(this); scroll.addView(body); dialog.setView(scroll); dialog.show();
+    }
+    private void infrared(String key) {
+        if(infraredBusy || SystemClock.elapsedRealtime()-lastInfrared<1200) return;
+        String saved=getPreferences(0).getString("ir_profile",""); infraredBusy=true; lastInfrared=SystemClock.elapsedRealtime();
+        infraredWorker.execute(() -> {
+            try { InfraredRemote.send(this,new JSONObject(saved),key); runOnUiThread(() -> { infraredBusy=false; if(!isDestroyed()) {
+                status.setText("ИК-команда отправлена. Проверь реакцию проектора.");
+                if(key.equals("home") && foreground) new AlertDialog.Builder(this).setTitle("Проектор перешёл на главный экран?")
+                    .setMessage("Подтверди только если сработала команда телефона. Это откроет ИК-кнопку питания; её работу нужно проверить отдельно.")
+                    .setPositiveButton("Да, сработало",(d,w) -> getPreferences(0).edit().putString("ir_confirmed_profile",saved).apply())
+                    .setNegativeButton("Нет реакции",(d,w) -> { getPreferences(0).edit().remove("ir_confirmed_profile").apply(); status.setText("ИК-коды не подошли. Управление проекцией по Wi-Fi остаётся доступным."); }).show();
+            } }); }
+            catch(Exception e) { runOnUiThread(() -> { infraredBusy=false; if(!isDestroyed()) status.setText(e.getMessage()); }); }
+        });
+    }
+    private void projection(boolean on) {
+        if(!ready()) return;
+        operation(() -> client.request("/power/control",new JSONObject().put("action",on?"projection_on":"projection_off")).optString("message","Проверь проекцию"),status::setText);
+    }
+    private void quickFocus(LinearLayout row,String label,String action) {
+        RemoteButton button=button(label,null,LIME,INK,24,null);
+        button.setContentDescription(label.equals("F−")?"Фокус ближе F−":"Фокус дальше F+");
+        button.instant(() -> { if(directFocus) projectorAction(action); else { button.cancelPress(); openSetting("Фокус",new String[]{"Фокус","Фокусировка","Focus"}); } },true);
+        controls.add(button); row.addView(button,weighted(58,5));
+    }
+    private void detectProjector(JSONObject info) {
+        directFocus=info.optBoolean("directFocus") || info.has("focusAuthority");
+        if(directFocus || "projector".equals(info.optString("deviceKind"))) {
+            getPreferences(0).edit().putBoolean("known_projector",true).apply();
+            getSharedPreferences("remote_ui",0).edit().putString("device_kind","projector").apply();
+        }
+    }
+    private void connectionOptions() {
+        if(getPreferences(0).getString("token","").isEmpty()) { pairing(); return; }
+        new AlertDialog.Builder(this).setTitle(linked?"Устройство подключено":"Ждём сохранённое устройство")
+            .setMessage("Включи проектор и подключи его к той же домашней сети. Пульт найдёт его автоматически, вводить код повторно не нужно.")
+            .setPositiveButton("Повторить поиск",(dialog,which) -> { if(!busy) { linked=false; reconnectSaved(); } })
+            .setNeutralButton("Другое устройство / новый код",(dialog,which) -> pairing()).setNegativeButton("Закрыть",null).show();
+    }
     private SocketFactory wifi() {
         return wifiNetwork().getSocketFactory();
     }
@@ -97,7 +202,7 @@ public class ReceiverActivity extends Activity {
         for(Network n:cm.getAllNetworks()) { NetworkCapabilities c=cm.getNetworkCapabilities(n); if(c!=null && c.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) && !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return n; }
         throw new IllegalStateException("Подключи телефон к домашнему Wi-Fi");
     }
-    private boolean ready() { if(!linked) { pairing(); return false; } return !busy; }
+    private boolean ready() { if(!linked) { if(getPreferences(0).getString("token","").isEmpty()) pairing(); else reconnectSaved(); return false; } return !busy; }
     private void pairing() {
         if(busy || (pairing!=null && pairing.isShowing())) return;
         LinearLayout fields=column(); fields.setPadding(dp(24),dp(8),dp(24),0);
@@ -145,7 +250,7 @@ public class ReceiverActivity extends Activity {
         try {
             ReceiverClient next=new ReceiverClient(ip,wifi()); if(code.isEmpty()) next.token=getPreferences(0).getString("token","");
             if(next.token.isEmpty() && !code.matches("[0-9]{6}")) { Toast.makeText(this,"Введи код из 6 цифр с экрана приёмника",Toast.LENGTH_LONG).show(); return; }
-            generation++; pending=0; worker.getQueue().clear(); client=next; linked=false;
+            generation++; pending=0; probing=false; worker.getQueue().clear(); client=next; linked=false;
             operation(() -> {
                 ReceiverClient destination=next;
                 if(!next.token.isEmpty()) {
@@ -158,14 +263,27 @@ public class ReceiverActivity extends Activity {
                 if(next.token.isEmpty()) {
                     next.token=next.request("/pair",new JSONObject().put("pin",code)).getString("token");
                     // The PIN is consumed now. Persist before any optional network request.
-                    if(!getPreferences(0).edit().putString("ip",ip).putString("token",next.token).commit())
+                    if(!getPreferences(0).edit().putString("ip",ip).putString("token",next.token).remove("known_projector").remove("ir_profile").remove("ir_confirmed_profile").remove("projection_control").commit())
                         throw new java.io.IOException("Не удалось сохранить подключение на телефоне");
                 }
                 receiverStatus=destination.request("/status",new JSONObject());
+                if(!receiverStatus.optBoolean("accessibility",true)) throw new java.io.IOException("Служба управления запускается");
+                JSONObject deviceInfo=receiverStatus;
+                if(!deviceInfo.has("directFocus")) {
+                    try { deviceInfo=destination.request("/projector/state",new JSONObject()); }
+                    catch(ReceiverClient.RemoteException ignored) { /* Generic TV / older receiver. */ }
+                }
+                detectProjector(deviceInfo);
+                if(receiverStatus.optJSONObject("update")!=null && receiverStatus.getJSONObject("update").optLong("versionCode")>=12) {
+                    try { JSONObject powerState=destination.request("/power/state",new JSONObject()); if(powerState.optBoolean("projectionControl")) getPreferences(0).edit().putBoolean("projection_control",true).apply(); } catch(ReceiverClient.RemoteException ignored) {}
+                    if(InfraredRemote.available(this)) {
+                        try { JSONObject profile=InfraredRemote.profile(destination.request("/diagnostics/power",new JSONObject())); if(profile!=null) getPreferences(0).edit().putString("ir_profile",profile.toString()).apply(); } catch(ReceiverClient.RemoteException ignored) {}
+                    }
+                }
                 if(!getPreferences(0).edit().putString("ip",destination.ip).putString("token",destination.token).commit()) throw new java.io.IOException("Не удалось сохранить подключение на телефоне");
                 client=destination; if(bundledUpdate==null) bundledUpdate=new ReceiverUpdate(this);
                 return "Подключено · "+receiverStatus.optString("model","устройство");
-            },message -> { linked=true; automaticConnection=false; reconnectAttempt=0; if(pairing!=null) pairing.dismiss(); status.setText(message); enabled(); maybeUpdate(); });
+            },message -> { linked=true; automaticConnection=false; reconnectAttempt=0; if(pairing!=null) pairing.dismiss(); updateDeviceKind(); status.setText(message); enabled(); maybeUpdate(); });
         } catch(Exception e) { failure(e); }
     }
     private void maybeUpdate() {
@@ -263,7 +381,8 @@ public class ReceiverActivity extends Activity {
         operation(() -> {
             try {
                 JSONObject values=client.request("/projector/state",new JSONObject());
-                if(values.optBoolean("ok") && values.has("scale")) { runOnUiThread(() -> renderAdjustment(title,values)); return title.equals("Фокус")?"Нажимай F− / F+. Удержание меняет фокус плавно.":"Настройки читаются прямо из проектора"; }
+                boolean focus=title.equals("Фокус") && (values.optBoolean("directFocus") || values.has("focusAuthority"));
+                if(values.optBoolean("ok") && (focus || (!title.equals("Фокус") && values.has("scale")))) { if(focus) directFocus=true; runOnUiThread(() -> renderAdjustment(title,values)); return title.equals("Фокус")?"Нажимай F− / F+. Удержание меняет фокус плавно.":"Настройки читаются прямо из проектора"; }
             } catch(ReceiverClient.RemoteException ignored) { }
             if(title.equals("Фокус")) {
                 try { JSONObject focus=client.request("/open_focus",new JSONObject()); if(focus.optBoolean("ok")) { Thread.sleep(120); JSONObject screen=client.request("/ui",new JSONObject()); runOnUiThread(() -> renderPanel(screen)); return "Фокусировка линзы"; } } catch(ReceiverClient.RemoteException ignored) { }
@@ -288,15 +407,15 @@ public class ReceiverActivity extends Activity {
         adjustment=""; adjustmentValue=null;
         panel=new Dialog(this); LinearLayout body=column(); body.setPadding(dp(20),dp(20),dp(20),dp(16)); body.setBackground(shape(BG,28));
         LinearLayout heading=row(); heading.setGravity(Gravity.CENTER_VERTICAL); TextView label=text(title,24,INK); label.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL)); heading.addView(label,new LinearLayout.LayoutParams(0,-2,1));
-        RemoteButton close=button("×",null,BG,MUTED,28,() -> panel.dismiss()); heading.addView(close,new LinearLayout.LayoutParams(dp(48),dp(48))); body.addView(heading);
+        RemoteButton close=button("×",null,BG,MUTED,28,() -> panel.dismiss()); close.setContentDescription("Закрыть настройки"); heading.addView(close,new LinearLayout.LayoutParams(dp(48),dp(48))); body.addView(heading);
         panelMessage=text("Читаем меню устройства…",14,MUTED); body.addView(panelMessage,lp(-1,-2,6));
         ScrollView scroll=new ScrollView(this); panelItems=column(); scroll.addView(panelItems); LinearLayout.LayoutParams listLayout=new LinearLayout.LayoutParams(-1,0,1); listLayout.topMargin=dp(12); body.addView(scroll,listLayout);
         LinearLayout arrows=row(); body.addView(arrows,lp(-1,48,12));
         for(String direction:new String[]{"left","up","ok","down","right"}) { RemoteButton b=button(direction.equals("ok")?"OK":"",direction.equals("ok")?null:direction,direction.equals("ok")?LIME:WHITE,INK,16,null); b.setContentDescription(direction.equals("left")?"Влево":direction.equals("right")?"Вправо":direction.equals("up")?"Вверх":direction.equals("down")?"Вниз":"OK"); b.instant(() -> key(direction),!direction.equals("ok")); panelControls.add(b); arrows.addView(b,weighted(48,4)); }
         LinearLayout actions=row(); body.addView(actions,lp(-1,48,8));
         RemoteButton back=button("Назад","back",WHITE,INK,14,() -> { if(!adjustment.isEmpty()) panel.dismiss(); else key("back"); }); panelControls.add(back); actions.addView(back,weighted(48,4));
-        RemoteButton refresh=button("Обновить","refresh",WHITE,INK,14,() -> readPanel()); panelControls.add(refresh); actions.addView(refresh,weighted(48,4));
-        nextPage=button("Дальше","down",WHITE,INK,14,() -> key("scroll_down")); panelControls.add(nextPage); actions.addView(nextPage,weighted(48,4));
+        RemoteButton refresh=button("Обновить",null,WHITE,INK,14,() -> readPanel()); panelControls.add(refresh); actions.addView(refresh,weighted(48,4));
+        nextPage=button("Дальше",null,WHITE,INK,14,() -> key("scroll_down")); panelControls.add(nextPage); actions.addView(nextPage,weighted(48,4));
         panel.setContentView(body); Window window=panel.getWindow(); if(window!=null) { window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT)); window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND); WindowManager.LayoutParams params=window.getAttributes(); params.gravity=Gravity.BOTTOM; params.dimAmount=.32f; window.setAttributes(params); }
         panel.setOnDismissListener(d -> { timers.removeCallbacks(refreshPanel); for(RemoteButton b:panelControls) b.cancelPress(); panelControls.clear(); panelSliders.clear(); panelItems=null; panelMessage=null; adjustment=""; adjustmentValue=null; });
         panel.show(); if(window!=null) window.setLayout(-1,(int)(getResources().getDisplayMetrics().heightPixels*.80)); enabled();
@@ -415,14 +534,16 @@ public class ReceiverActivity extends Activity {
     private void tile(LinearLayout row,String title,String subtitle,String icon,boolean accent,Runnable action) {
         RemoteButton b=button(title+"\n"+subtitle,icon,accent?LIME:WHITE,INK,17,action); b.setGravity(Gravity.CENTER_VERTICAL|Gravity.START); b.setPadding(dp(14),dp(12),dp(10),dp(12)); b.setCompoundDrawablePadding(dp(10));
         SpannableString label=new SpannableString(title+"\n"+subtitle); label.setSpan(new StyleSpan(Typeface.BOLD),0,title.length(),0); label.setSpan(new RelativeSizeSpan(.70f),title.length()+1,label.length(),0); label.setSpan(new ForegroundColorSpan(MUTED),title.length()+1,label.length(),0); b.setText(label);
-        controls.add(b); row.addView(b,weighted(90,5));
+        controls.add(b); b.setMinHeight(dp(90));
+        row.addView(b,row.getOrientation()==LinearLayout.VERTICAL?lp(-1,-2,8):weighted(90,5));
     }
     private void padKey(FrameLayout parent,String label,String icon,int x,int y,int width,int height) { RemoteButton b=button("",icon,0xff263b30,WHITE,20,null); b.setContentDescription(label); b.instant(() -> key(icon),true); controls.add(b); frame(parent,b,x,y,width,height); }
-    private void frame(FrameLayout parent,RemoteButton b,int x,int y,int width,int height) { FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(dp(width),dp(height)); p.leftMargin=dp(x); p.topMargin=dp(y); parent.addView(b,p); }
-    private void navKey(LinearLayout row,String label,String key) { RemoteButton b=button(label,key.equals("menu")?"settings":key,WHITE,INK,14,null); b.instant(() -> key(key),false); controls.add(b); row.addView(b,weighted(52,4)); }
-    private void soundKey(LinearLayout row,String label,String icon,String key) { RemoteButton b=button(label,icon,WHITE,INK,15,null); b.instant(() -> key(key),true); controls.add(b); row.addView(b,weighted(52,4)); }
+    private void frame(FrameLayout parent,RemoteButton b,int x,int y,int width,int height) { float scale=parent.getLayoutParams().width/(float)dp(252); FrameLayout.LayoutParams p=new FrameLayout.LayoutParams(Math.round(dp(width)*scale),Math.round(dp(height)*scale)); p.leftMargin=Math.round(dp(x)*scale); p.topMargin=Math.round(dp(y)*scale); parent.addView(b,p); }
+    private void navKey(LinearLayout row,String label,String key) { String icon=getResources().getConfiguration().screenWidthDp<340 || getResources().getConfiguration().fontScale>1.2f?null:key.equals("menu")?"settings":key; RemoteButton b=button(label,icon,WHITE,INK,14,null); b.instant(() -> key(key),false); controls.add(b); row.addView(b,weighted(52,4)); }
+    private void soundKey(LinearLayout row,String label,String icon,String key) { RemoteButton b=button(label,null,WHITE,INK,15,null); b.instant(() -> key(key),true); controls.add(b); row.addView(b,weighted(52,4)); }
     private RemoteButton button(String label,String icon,int background,int color,int size,Runnable action) {
         RemoteButton b=new RemoteButton(this); b.setText(label); b.setTextSize(size); b.setTextColor(color); b.setPadding(dp(10),0,dp(10),0); b.setGravity(Gravity.CENTER);
+        b.setElevation(0); b.setStateListAnimator(null);
         b.setBackground(new RippleDrawable(ColorStateList.valueOf(background==DARK?0x33ffffff:0x25192b24),shape(background,17),shape(Color.WHITE,17)));
         if(icon!=null) { RemoteIcon drawable=new RemoteIcon(icon,color,dp(label.isEmpty()?28:23)); if(label.isEmpty()) b.centerIcon(drawable); else { b.setCompoundDrawablesRelativeWithIntrinsicBounds(drawable,null,null,null); b.setCompoundDrawablePadding(dp(6)); } }
         if(action!=null) b.setOnClickListener(v -> action.run()); return b;
@@ -445,12 +566,13 @@ public class ReceiverActivity extends Activity {
         try { cm.registerNetworkCallback(new NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(),networkCallback); }
         catch(RuntimeException ignored) { networkCallback=null; }
         reconnectSaved();
+        timers.removeCallbacks(heartbeat); timers.postDelayed(heartbeat,5000);
     }
     @Override protected void onPause() {
         foreground=false;
         if(networkCallback!=null) { try { ((ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE)).unregisterNetworkCallback(networkCallback); } catch(RuntimeException ignored) {} networkCallback=null; }
-        generation++; pending=0; busy=false; linked=false; worker.getQueue().clear(); timers.removeCallbacksAndMessages(null);
+        generation++; pending=0; busy=false; probing=false; linked=false; worker.getQueue().clear(); timers.removeCallbacksAndMessages(null);
         for(RemoteButton b:controls) b.cancelPress(); for(RemoteButton b:panelControls) b.cancelPress(); super.onPause();
     }
-    @Override protected void onDestroy() { generation++; worker.shutdownNow(); if(panel!=null) panel.dismiss(); if(pairing!=null) pairing.dismiss(); super.onDestroy(); }
+    @Override protected void onDestroy() { generation++; worker.shutdownNow(); infraredWorker.shutdownNow(); if(panel!=null) panel.dismiss(); if(pairing!=null) pairing.dismiss(); super.onDestroy(); }
 }

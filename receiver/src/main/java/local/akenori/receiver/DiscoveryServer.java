@@ -8,9 +8,9 @@ import local.homeremote.protocol.DiscoveryProof;
 
 final class DiscoveryServer implements Closeable {
     private final DatagramSocket socket;
-    private final ControlService owner;
+    private final ReceiverService owner;
     private final LocalServer server;
-    DiscoveryServer(ControlService owner,LocalServer server) throws Exception {
+    DiscoveryServer(ReceiverService owner,LocalServer server) throws Exception {
         this.owner=owner; this.server=server; socket=new DatagramSocket(DiscoveryProof.PORT);
     }
     void start() { new Thread(this::listen,"remote-discovery").start(); }
@@ -31,4 +31,5 @@ final class DiscoveryServer implements Closeable {
         } catch(Exception ignored) { /* Ignore malformed packets and shutdown; no secret logging. */ }
     }
     @Override public void close() { socket.close(); }
+    boolean isRunning() { return !socket.isClosed(); }
 }

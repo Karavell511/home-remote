@@ -9,7 +9,7 @@ import java.util.*;
 import java.util.concurrent.*;
 
 final class LocalServer implements Closeable {
-    private final ControlService owner;
+    private final ReceiverService owner;
     private final ServerSocket listener;
     private final ThreadPoolExecutor workers=new ThreadPoolExecutor(2,2,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(8));
     private final SecureRandom random=new SecureRandom();
@@ -19,7 +19,7 @@ final class LocalServer implements Closeable {
     private long expires,blockedUntil;
     private int failures;
     private boolean paired;
-    LocalServer(ControlService owner) throws IOException {
+    LocalServer(ReceiverService owner) throws IOException {
         this.owner=owner; listener=new ServerSocket(); listener.setReuseAddress(true); listener.bind(new InetSocketAddress(8787));
         String saved=owner.getSharedPreferences("pairing",0).getString("token","");
         if(saved.matches("[0-9a-f]{64}")) { token=saved; paired=true; } else newPairing();
@@ -49,9 +49,10 @@ final class LocalServer implements Closeable {
                 Socket socket=listener.accept();
                 peers.add(socket);
                 try { workers.execute(() -> serve(socket)); } catch(RejectedExecutionException e) { peers.remove(socket); socket.close(); }
-            } catch(IOException e) { if(!closed) owner.failure="Сервер остановился"; break; }
+            } catch(IOException e) { if(!closed) owner.failure="Сервер остановился"; close(); break; }
         },"projector-receiver").start();
     }
+    boolean isRunning() { return !closed && !listener.isClosed(); }
     private void serve(Socket socket) {
         try(Socket peer=socket) {
             peer.setSoTimeout(3000); peer.setTcpNoDelay(true);
@@ -98,7 +99,7 @@ final class LocalServer implements Closeable {
                 OutputStream out=peer.getOutputStream(); out.write(header.getBytes(StandardCharsets.US_ASCII));
                 try(InputStream file=new FileInputStream(archive)) { byte[] buffer=new byte[32768]; int n; while((n=file.read(buffer))!=-1) out.write(buffer,0,n); } out.flush(); return;
             }
-            if(!Arrays.asList("/status","/key","/ui","/tap","/range","/capabilities","/open_focus","/update/allow","/keyboard/setup","/keyboard/select","/projector/state","/projector/control").contains(route)) { respond(peer,404,error("Неизвестная команда")); return; }
+            if(!Arrays.asList("/status","/key","/ui","/tap","/range","/capabilities","/open_focus","/update/allow","/keyboard/setup","/keyboard/select","/projector/state","/projector/control","/power/state","/power/control","/diagnostics/power").contains(route)) { respond(peer,404,error("Неизвестная команда")); return; }
             try { respond(peer,200,owner.call(route,request)); } catch(Exception e) { respond(peer,400,error("Android не выполнил запрос: "+(e.getCause()!=null?e.getCause().getMessage():e.getMessage()))); }
         } catch(Exception ignored) { /* Malformed or abandoned request; never record credentials or screen content. */
             if((owner.getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0) android.util.Log.w("HomeRemoteServer",ignored.getClass().getSimpleName());

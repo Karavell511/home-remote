@@ -25,6 +25,7 @@ public class DumpInstrumentation extends Instrumentation {
     private void dump(XmlSerializer xml,AccessibilityNodeInfo n) throws Exception {
         xml.startTag(null,"node"); Rect b=new Rect(); n.getBoundsInScreen(b);
         xml.attribute(null,"text",n.getText()==null?"":n.getText().toString()); xml.attribute(null,"class",String.valueOf(n.getClassName()));
+        xml.attribute(null,"content-desc",n.getContentDescription()==null?"":n.getContentDescription().toString());
         xml.attribute(null,"bounds","["+b.left+","+b.top+"]["+b.right+","+b.bottom+"]"); xml.attribute(null,"enabled",String.valueOf(n.isEnabled()));
         xml.attribute(null,"focused",String.valueOf(n.isFocused())); xml.attribute(null,"selected",String.valueOf(n.isSelected()));
         for(int i=0;i<n.getChildCount();i++) { AccessibilityNodeInfo c=n.getChild(i); if(c!=null) dump(xml,c); }
